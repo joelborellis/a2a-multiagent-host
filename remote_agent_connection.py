@@ -1,56 +1,46 @@
-import traceback
+import logging
 
 from collections.abc import Callable
 
-from a2a.client import (
-    Client,
-    ClientFactory,
-)
+import httpx
+
+from a2a.client import A2AClient
 from a2a.types import (
     AgentCard,
-    Message,
+    SendMessageRequest,
+    SendMessageResponse,
     Task,
     TaskArtifactUpdateEvent,
-    TaskState,
     TaskStatusUpdateEvent,
 )
+from dotenv import load_dotenv
 
+
+load_dotenv()
 
 TaskCallbackArg = Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
 TaskUpdateCallback = Callable[[TaskCallbackArg, AgentCard], Task]
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class RemoteAgentConnections:
     """A class to hold the connections to the remote agents."""
 
-    def __init__(self, client_factory: ClientFactory, agent_card: AgentCard):
-        self.agent_client: Client = client_factory.create(agent_card)
-        self.card: AgentCard = agent_card
-        self.pending_tasks = set()
+    def __init__(self, agent_card: AgentCard, agent_url: str):
+        logger.debug(f'agent_card: {agent_card}')
+        logger.debug(f'agent_url: {agent_url}')
+        self._httpx_client = httpx.AsyncClient(timeout=30)
+        self.agent_client = A2AClient(
+            self._httpx_client, agent_card, url=agent_url
+        )
+        self.card = agent_card
 
     def get_agent(self) -> AgentCard:
         return self.card
 
-    async def send_message(self, message: Message) -> Task | Message | None:
-        lastTask: Task | None = None
-        try:
-            async for event in self.agent_client.send_message(message):
-                if isinstance(event, Message):
-                    return event
-                if self.is_terminal_or_interrupted(event[0]):
-                    return event[0]
-                lastTask = event[0]
-        except Exception as e:
-            print('Exception found in send_message')
-            traceback.print_exc()
-            raise e
-        return lastTask
-
-    def is_terminal_or_interrupted(self, task: Task) -> bool:
-        return task.status.state in [
-            TaskState.completed,
-            TaskState.canceled,
-            TaskState.failed,
-            TaskState.input_required,
-            TaskState.unknown,
-        ]
+    async def send_message(
+        self, message_request: SendMessageRequest
+    ) -> SendMessageResponse:
+        return await self.agent_client.send_message(message_request)
